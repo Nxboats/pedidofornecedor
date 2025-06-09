@@ -1,0 +1,20 @@
+body {
+    background: #e0e0e0;
+  }
+  .titulo {
+    font-weight: bold;
+    font-size: 1.8rem;
+    color: #343a40;
+  }
+  .input-group {
+    max-width: 500px;
+    margin: 0 auto;
+  }
+  .table-wrapper {
+    max-width: 1100px;
+    margin: 0 auto;
+  }
+  .cabecalho-wrapper {
+    max-width: 900px;
+    margin: 0 auto 2rem auto;
+  }
