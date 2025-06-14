@@ -1,59 +1,53 @@
 const express = require('express');
 const axios = require('axios');
 const cors = require('cors');
-
 const app = express();
+
 app.use(cors());
 app.use(express.json());
 
-// CONFIGURAÇÕES
-const SANKHYA_URL = 'http://192.168.0.239:8180';
+const SANKHYA_URL = 'http://sankhya2.nxboats.com.br:8180';
 const USUARIO = 'SUP';
 const SENHA = 'Sup#ti@88#3448';
 
-// LOGIN NO SANKHYA
 async function loginSankhya() {
-  const response = await axios.post(`${SANKHYA_URL}/mge/service.sbr?serviceName=MobileLoginSP.login&outputType=json`, {
-    serviceName: "MobileLoginSP.login",
-    requestBody: {
-      NOMUSU: { "$": USUARIO },
-      INTERNO: { "$": SENHA },
-      KEEPCONNECTED: { "$": "S" }
+  const response = await axios.post(
+    `${SANKHYA_URL}/mge/service.sbr?serviceName=MobileLoginSP.login&outputType=json`,
+    {
+      serviceName: "MobileLoginSP.login",
+      requestBody: {
+        NOMUSU: { "$": USUARIO },
+        INTERNO: { "$": SENHA },
+        KEEPCONNECTED: { "$": "S" }
+      }
+    },
+    {
+      headers: { 'Content-Type': 'application/json' }
     }
-  }, {
-    headers: { 'Content-Type': 'application/json' }
-  });
+  );
 
   const jsessionid = response.data.responseBody?.jsessionid?.["$"];
   if (!jsessionid) throw new Error("Login falhou");
   return `JSESSIONID=${jsessionid}`;
 }
 
-// ROTA PARA CONSULTAR ITENS DO PEDIDO
+// Endpoint para consultar itens do pedido
 app.get('/api/itens-pedido', async (req, res) => {
   const nunota = req.query.nunota;
-
-  if (!nunota) {
-    return res.status(400).json({ erro: "Parâmetro 'nunota' é obrigatório na URL." });
-  }
+  if (!nunota) return res.status(400).json({ erro: "Parâmetro 'nunota' é obrigatório" });
 
   try {
     const sessionId = await loginSankhya();
 
     const sql = `
-      SELECT
-        IP.NUNOTA AS NUNOTA,
-        CAST(P.DESCRPROD AS VARCHAR(4000)) AS DESCRPROD,
-        IP.QTDNEG AS QTDNEG,
-        IP.VLRUNIT AS VLRUNIT,
-        NVL(PAP.CODPROPARC,'Sem Referencia') AS CODPROPARC
+      SELECT IP.NUNOTA, CAST(P.DESCRPROD AS VARCHAR(4000)), IP.QTDNEG, IP.VLRUNIT,
+             NVL(PAP.CODPROPARC,'Sem Referencia')
       FROM TGFITE IP
       JOIN TGFCAB C ON C.NUNOTA = IP.NUNOTA
       JOIN TGFPRO P ON P.CODPROD = IP.CODPROD
-      LEFT JOIN TGFPAP PAP  ON  IP.CODPROD = PAP.CODPROD AND C.CODPARC = PAP.CODPARC
+      LEFT JOIN TGFPAP PAP ON IP.CODPROD = PAP.CODPROD AND C.CODPARC = PAP.CODPARC
       WHERE IP.NUNOTA = ${nunota}
     `;
-
 
     const consulta = {
       serviceName: "DbExplorerSP.executeQuery",
@@ -74,43 +68,32 @@ app.get('/api/itens-pedido', async (req, res) => {
       }
     );
 
-    const linhas = response.data.responseBody?.rows || [];
-
-    const itens = linhas.map(row => ({
+    const itens = response.data.responseBody?.rows.map(row => ({
       nomeProduto: String(row[1]).normalize('NFC'),
       qtd: row[2],
       vlrUnit: row[3],
       codProparc: row[4]
-    }));
+    })) || [];
 
     res.json({ itens });
-    console.log("Linhas recebidas:", response.data.responseBody?.rows);
-
-  } catch (err) {
-    console.error("Erro ao consultar itens com DbExplorer:", err.message);
-    res.status(500).json({ erro: "Falha ao buscar itens com SQL direto", detalhes: err.message });
+  } catch (error) {
+    console.error("Erro ao buscar itens:", error.message);
+    res.status(500).json({ erro: "Erro ao buscar itens", detalhes: error.message });
   }
 });
 
-// ROTA PARA CONSULTAR CABEÇALHO DO PEDIDO
+// Endpoint para consultar o cabeçalho do pedido
 app.get('/api/cabecalho-pedido', async (req, res) => {
   const nunota = req.query.nunota;
-  if (!nunota) return res.status(400).json({ erro: "Parâmetro 'nunota' é obrigatório." });
+  if (!nunota) return res.status(400).json({ erro: "Parâmetro 'nunota' é obrigatório" });
 
   try {
     const sessionId = await loginSankhya();
 
     const sql = `
-      SELECT
-        CAB.CODPARC || ' - ' || PAR.RAZAOSOCIAL AS PARCEIRO,
-        ENDE.TIPO || ' ' || ENDE.NOMEEND || ', ' || PAR.NUMEND AS ENDERECO,
-        PAR.CEP,
-        CID.NOMECID || '-' || UFS.UF AS CIDADE,
-        Formatar_Cpf_Cnpj(PAR.CGC_CPF) AS CGC,
-        PAR.IDENTINSCESTAD,
-        PAR.CODVEND || ' - ' || VEN.APELIDO AS VENDEDOR,
-        CAB.DTNEG,
-        CAB.NUNOTA
+      SELECT CAB.CODPARC || ' - ' || PAR.RAZAOSOCIAL, ENDE.TIPO || ' ' || ENDE.NOMEEND || ', ' || PAR.NUMEND,
+             PAR.CEP, CID.NOMECID || '-' || UFS.UF, Formatar_Cpf_Cnpj(PAR.CGC_CPF),
+             PAR.IDENTINSCESTAD, PAR.CODVEND || ' - ' || VEN.APELIDO, CAB.DTNEG, CAB.NUNOTA
       FROM TGFCAB CAB
       JOIN TGFPAR PAR ON PAR.CODPARC = CAB.CODPARC
       JOIN TSIEND ENDE ON ENDE.CODEND = PAR.CODEND
@@ -140,29 +123,68 @@ app.get('/api/cabecalho-pedido', async (req, res) => {
     );
 
     const row = response.data.responseBody?.rows?.[0];
-    if (!row) {
-      return res.status(404).json({ erro: "Cabeçalho não encontrado." });
-    }
+    if (!row) return res.status(404).json({ erro: "Cabeçalho não encontrado." });
 
     const cabecalho = {
-      parceiro: row[0],
-      endereco: row[1],
-      cep: row[2],
-      cidade: row[3],
-      cgc: row[4],
-      rgIe: row[5],
-      vendedor: row[6],
-      dataNegociacao: row[7],
-      nunota: row[8]
+      parceiro: row[0], endereco: row[1], cep: row[2], cidade: row[3],
+      cgc: row[4], rgIe: row[5], vendedor: row[6],
+      dataNegociacao: row[7], nunota: row[8]
     };
 
     res.json(cabecalho);
-  } catch (err) {
-    console.error("Erro ao buscar cabeçalho:", err.message);
-    res.status(500).json({ erro: "Erro ao buscar cabeçalho", detalhes: err.message });
+  } catch (error) {
+    console.error("Erro ao buscar cabeçalho:", error.message);
+    res.status(500).json({ erro: "Erro ao buscar cabeçalho", detalhes: error.message });
   }
 });
 
-app.listen(3000, () => {
-  console.log("Servidor rodando em http://localhost:3000");
+// Endpoint para confirmar pedido
+app.post('/api/confirmar-pedido', async (req, res) => {
+  const { nunota, observacao, email, dataEntrega } = req.body;
+  console.log("➡️ Dados recebidos do front:", req.body);
+
+  if (!nunota || !observacao || !email || !dataEntrega) {
+    return res.status(400).json({ erro: "Todos os campos são obrigatórios: nunota, observacao, email, dataEntrega" });
+  }
+
+  try {
+    const sessionId = await loginSankhya();
+
+    const payload = {
+      serviceName: "DatasetSP.save",
+      requestBody: {
+        entityName: "CabecalhoNota",
+        fields: ["AD_OBSFORNDT", "AD_EMAILFORNDT", "DTPREVENT"],
+        records: [
+          {
+            pk: { NUNOTA: nunota },
+            values: {
+              "0": observacao,
+              "1": email,
+              "2": dataEntrega
+            }
+          }
+        ]
+      }
+    };
+
+    const response = await axios.post(
+      `${SANKHYA_URL}/mge/service.sbr?serviceName=DatasetSP.save&outputType=json`,
+      payload,
+      {
+        headers: {
+          'Content-Type': 'application/json',
+          'Cookie': sessionId
+        }
+      }
+    );
+
+    res.status(200).json({ sucesso: true, dados: response.data });
+  } catch (error) {
+    console.error("Erro ao confirmar pedido:", JSON.stringify(error?.response?.data || error.message, null, 2));
+    res.status(500).json({ erro: "Erro ao confirmar pedido", detalhes: error?.response?.data || error.message });
+  }
+});
+app.listen(3000, '0.0.0.0', () => {
+  console.log("Servidor rodando na porta 3000 e acessível remotamente");
 });
