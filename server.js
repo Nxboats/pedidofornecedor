@@ -1,37 +1,43 @@
 const express = require('express');
 const axios = require('axios');
 const cors = require('cors');
+const iconv = require('iconv-lite');
+const path = require('path');
+
 const app = express();
 
-app.use(cors());
-app.use(express.json());
-
+// Config Sankhya
 const SANKHYA_URL = 'http://sankhya2.nxboats.com.br:8180';
 const USUARIO = 'SUP';
 const SENHA = 'Sup#ti@88#3448';
 
+app.use(cors());
+app.use(express.json());
+
+// Servir arquivos estáticos (HTML, CSS, JS)
+app.use(express.static(path.join(__dirname, 'public')));
+
+// Login
 async function loginSankhya() {
   const response = await axios.post(
     `${SANKHYA_URL}/mge/service.sbr?serviceName=MobileLoginSP.login&outputType=json`,
     {
-      serviceName: "MobileLoginSP.login",
+      serviceName: 'MobileLoginSP.login',
       requestBody: {
         NOMUSU: { "$": USUARIO },
         INTERNO: { "$": SENHA },
         KEEPCONNECTED: { "$": "S" }
       }
     },
-    {
-      headers: { 'Content-Type': 'application/json' }
-    }
+    { headers: { 'Content-Type': 'application/json' } }
   );
 
-  const jsessionid = response.data.responseBody?.jsessionid?.["$"];
-  if (!jsessionid) throw new Error("Login falhou");
+  const jsessionid = response.data.responseBody?.jsessionid?.['$'];
+  if (!jsessionid) throw new Error('Login falhou');
   return `JSESSIONID=${jsessionid}`;
 }
 
-// Endpoint para consultar itens do pedido
+// Itens do pedido
 app.get('/api/itens-pedido', async (req, res) => {
   const nunota = req.query.nunota;
   if (!nunota) return res.status(400).json({ erro: "Parâmetro 'nunota' é obrigatório" });
@@ -49,40 +55,39 @@ app.get('/api/itens-pedido', async (req, res) => {
       WHERE IP.NUNOTA = ${nunota}
     `;
 
-    const consulta = {
+    const payload = {
       serviceName: "DbExplorerSP.executeQuery",
-      requestBody: {
-        sql,
-        outputType: "json"
-      }
+      requestBody: { sql, outputType: "json" }
     };
 
     const response = await axios.post(
       `${SANKHYA_URL}/mge/service.sbr?serviceName=DbExplorerSP.executeQuery&outputType=json`,
-      consulta,
+      payload,
       {
-        headers: {
-          'Content-Type': 'application/json',
-          'Cookie': sessionId
-        }
+        headers: { 'Content-Type': 'application/json', Cookie: sessionId },
+        responseType: 'arraybuffer' // <-- captura como buffer
       }
     );
 
-    const itens = response.data.responseBody?.rows.map(row => ({
-      nomeProduto: String(row[1]).normalize('NFC'),
+    const decoded = iconv.decode(response.data, 'latin1');
+    const parsed = JSON.parse(decoded);
+
+    const itens = parsed.responseBody?.rows.map(row => ({
+      nomeProduto: row[1],
       qtd: row[2],
       vlrUnit: row[3],
       codProparc: row[4]
     })) || [];
 
     res.json({ itens });
+
   } catch (error) {
     console.error("Erro ao buscar itens:", error.message);
     res.status(500).json({ erro: "Erro ao buscar itens", detalhes: error.message });
   }
 });
 
-// Endpoint para consultar o cabeçalho do pedido
+// Cabeçalho do pedido
 app.get('/api/cabecalho-pedido', async (req, res) => {
   const nunota = req.query.nunota;
   if (!nunota) return res.status(400).json({ erro: "Parâmetro 'nunota' é obrigatório" });
@@ -103,48 +108,53 @@ app.get('/api/cabecalho-pedido', async (req, res) => {
       WHERE CAB.NUNOTA = ${nunota}
     `;
 
-    const consulta = {
+    const payload = {
       serviceName: "DbExplorerSP.executeQuery",
-      requestBody: {
-        sql,
-        outputType: "json"
-      }
+      requestBody: { sql, outputType: "json" }
     };
 
     const response = await axios.post(
       `${SANKHYA_URL}/mge/service.sbr?serviceName=DbExplorerSP.executeQuery&outputType=json`,
-      consulta,
+      payload,
       {
-        headers: {
-          'Content-Type': 'application/json',
-          'Cookie': sessionId
-        }
+        headers: { 'Content-Type': 'application/json', Cookie: sessionId },
+        responseType: 'arraybuffer'
       }
     );
 
-    const row = response.data.responseBody?.rows?.[0];
+    const decoded = iconv.decode(response.data, 'latin1');
+    const parsed = JSON.parse(decoded);
+    const row = parsed.responseBody?.rows?.[0];
+
     if (!row) return res.status(404).json({ erro: "Cabeçalho não encontrado." });
 
     const cabecalho = {
-      parceiro: row[0], endereco: row[1], cep: row[2], cidade: row[3],
-      cgc: row[4], rgIe: row[5], vendedor: row[6],
-      dataNegociacao: row[7], nunota: row[8]
+      parceiro: row[0],
+      endereco: row[1],
+      cep: row[2],
+      cidade: row[3],
+      cgc: row[4],
+      rgIe: row[5],
+      vendedor: row[6],
+      dataNegociacao: row[7],
+      nunota: row[8]
     };
 
     res.json(cabecalho);
+
   } catch (error) {
     console.error("Erro ao buscar cabeçalho:", error.message);
     res.status(500).json({ erro: "Erro ao buscar cabeçalho", detalhes: error.message });
   }
 });
 
-// Endpoint para confirmar pedido
+// Confirmar pedido
 app.post('/api/confirmar-pedido', async (req, res) => {
   const { nunota, observacao, email, dataEntrega } = req.body;
   console.log("➡️ Dados recebidos do front:", req.body);
 
   if (!nunota || !observacao || !email || !dataEntrega) {
-    return res.status(400).json({ erro: "Todos os campos são obrigatórios: nunota, observacao, email, dataEntrega" });
+    return res.status(400).json({ erro: "Todos os campos são obrigatórios" });
   }
 
   try {
@@ -155,36 +165,28 @@ app.post('/api/confirmar-pedido', async (req, res) => {
       requestBody: {
         entityName: "CabecalhoNota",
         fields: ["AD_OBSFORNDT", "AD_EMAILFORNDT", "DTPREVENT"],
-        records: [
-          {
-            pk: { NUNOTA: nunota },
-            values: {
-              "0": observacao,
-              "1": email,
-              "2": dataEntrega
-            }
-          }
-        ]
+        records: [{
+          pk: { NUNOTA: nunota },
+          values: { "0": observacao, "1": email, "2": dataEntrega }
+        }]
       }
     };
 
     const response = await axios.post(
       `${SANKHYA_URL}/mge/service.sbr?serviceName=DatasetSP.save&outputType=json`,
       payload,
-      {
-        headers: {
-          'Content-Type': 'application/json',
-          'Cookie': sessionId
-        }
-      }
+      { headers: { 'Content-Type': 'application/json', Cookie: sessionId } }
     );
 
     res.status(200).json({ sucesso: true, dados: response.data });
+
   } catch (error) {
     console.error("Erro ao confirmar pedido:", JSON.stringify(error?.response?.data || error.message, null, 2));
     res.status(500).json({ erro: "Erro ao confirmar pedido", detalhes: error?.response?.data || error.message });
   }
 });
+
+// Inicializar servidor
 app.listen(3000, '0.0.0.0', () => {
-  console.log("Servidor rodando na porta 3000 e acessível remotamente");
+  console.log("🚀 Servidor HTTP disponível externamente na porta 3000");
 });
